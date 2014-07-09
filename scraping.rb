@@ -41,8 +41,10 @@ class Scraping
   def search_drawer(app_title)
     drawer_search_url = "http://www.androiddrawer.com/search-results/?q=" + app_title
     puts "Fetching #{drawer_search_url}"
+    puts "This may take a moment..."
+    `phantomjs load_ajax.js #{drawer_search_url} search_results.html`
     begin
-      page = Nokogiri::HTML(open(drawer_search_url))
+      page = Nokogiri::HTML(open("search_results.html"))
     rescue OpenURI::HTTPError
       puts "Error: HTTP error in the given URL: #{play_store_url}."
       exit
@@ -50,17 +52,48 @@ class Scraping
       puts "Error: HTTP redirect error in the given URL: #{play_store_url}."
       exit
     end
-
-    #the following would work if the search results weren't loaded dynamically...
-    result_urls = page.css('div.gs-title a')
-    puts "search result url: #{result_urls[0]['data-ctorig']}"
+    page.css('div.gs-title a')
   end
 
+  def scrape_result(app, result_url)
+    puts "Fetching #{result_url}"
+    begin
+      page = Nokogiri::HTML(open(result_url))
+    rescue OpenURI::HTTPError
+      puts "Error: HTTP error in the given URL: #{play_store_url}."
+      exit
+    rescue OpenURI::HTTPRedirect
+      puts "Error: HTTP redirect error in the given URL: #{play_store_url}."
+      exit
+    end
+    app_info = App.new(app.name)
+    title = page.css('h1.entry-title').text.split(' ')
+    app_info.title = title.first(title.length - 1).join(' ')
+    app_info.creator = page.css('a.devlink').text
+    # issue: developer is sometimes abbreviated on androiddrawer (eg Corporation -> Corp.)
+    if app_info.title.include? app.title #and app_info.creator == app.creator
+      app_info.url = page.css('a.download-btn')[0]["href"]
+      app_info.version = title.last
+      puts "#{app_info.title} #{app_info.version}: #{app_info.url}"
+      app_info
+    else
+      puts "#{app_info.title} does not include #{app.title}"
+    end
+  end
 
   def start_main(apk_name)
     page = download_file(apk_name)
     app = extract_features(apk_name, page)
-    search_drawer(app.title)
+    search_results = search_drawer(app.title)
+    search_results.each do |result|
+        #result['data-ctorig'] is the url to the app page
+        if !result['data-ctorig'].nil? and result['data-ctorig'].include? app.title.downcase
+            # issue: scrape_result is executing twice for each result
+            # could be an issue in search_drawer
+            apk = scrape_result(app, result['data-ctorig'])
+            `wget '#{apk.url}' -O #{apk.title}-#{apk.version}.apk -P #{apk_name}`
+        end
+    end
   end
 
   public
